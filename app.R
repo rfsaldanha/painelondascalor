@@ -7,6 +7,8 @@ library(dplyr)
 library(tidyr)
 library(lubridate)
 library(ggplot2)
+library(leaflet)
+library(sf)
 
 # Data connection
 db_yearly <- open_dataset(sources = "data/banco_anual_tempmed.parquet")
@@ -18,6 +20,9 @@ mun_seats <- readRDS("data/mun_seats.rds")
 # Municipality list for selector
 mun_names <- mun_seats$code_muni
 names(mun_names) <- paste0(mun_seats$name_muni, ", ", mun_seats$abbrev_state)
+
+# Read municipality map
+mun_geo <- readRDS(file = "data/mun_simp.rds")
 
 # Interface
 ui <- page_navbar(
@@ -74,11 +79,45 @@ ui <- page_navbar(
     )
   ),
 
-  # Map page
+  nav_panel(
+    title = "Mapa",
+
+    # Map pane
+    layout_sidebar(
+      sidebar = sidebar(
+        selectizeInput(
+          inputId = "year_map",
+          label = "Ano",
+          choices = NULL
+        ),
+        selectInput(
+          inputId = "intensity_map",
+          label = "Intensidade da onda de calor",
+          choices = c("95", "92.5", "97.5")
+        ),
+        selectInput(
+          inputId = "indicator_map",
+          label = "Indicador",
+          choices = c(
+            "Número de eventos" = "n_eventos",
+            "Duração média (dias consecutivos)" = "duracao_media",
+            "Intensidade média (°C)" = "intensidade_media"
+          )
+        )
+      ),
+      card(
+        class = "p-0",
+        full_screen = TRUE,
+        card_body(
+          leafletOutput(outputId = "map")
+        )
+      )
+    )
+  ),
+
+  # Yearly pane
   nav_panel(
     title = "Dados anuais",
-
-    # Sidebar
     layout_sidebar(
       sidebar = sidebar(
         selectizeInput(
@@ -92,8 +131,6 @@ ui <- page_navbar(
           choices = c("95", "92.5", "97.5")
         )
       ),
-
-      # Yearly graph
       card(
         full_screen = TRUE,
         plotOutput(outputId = "yearly_graph")
@@ -101,7 +138,7 @@ ui <- page_navbar(
     )
   ),
 
-  # Graphs page
+  # Daily pane
   nav_panel(
     title = "Dados diários",
 
@@ -144,6 +181,20 @@ ui <- page_navbar(
 
 # Server
 server <- function(input, output, session) {
+  # Year selector
+  updateSelectizeInput(
+    session = session,
+    inputId = "year_map",
+    label = "Ano",
+    choices = db_yearly |>
+      select(ano) |>
+      distinct(ano) |>
+      arrange(ano) |>
+      collect() |>
+      pull(ano),
+    server = TRUE
+  )
+
   # Municipality selector
   updateSelectizeInput(
     session = session,
@@ -176,6 +227,41 @@ server <- function(input, output, session) {
       filter(intensidade == input$intensity) |>
       mutate(mes_mais_frequente = as.numeric(mes_mais_frequente)) |>
       collect()
+  })
+
+  # Map
+  output$map <- renderLeaflet({
+    req(input$year_map)
+    req(input$intensity_map)
+    req(input$indicator_map)
+
+    df <- db_yearly |>
+      filter(ano == as.numeric(input$year_map)) |>
+      filter(intensidade == input$intensity_map) |>
+      rename(code_muni = CODMUNRES) |>
+      select(ano, code_muni, !!input$indicator_map) |>
+      rename(var = !!input$indicator_map) |>
+      collect()
+
+    res <- left_join(x = mun_geo, y = df, by = "code_muni")
+
+    pal <- colorNumeric(palette = "YlOrRd", domain = res$var)
+
+    leaflet(data = res) |>
+      addTiles() |>
+      addPolygons(
+        stroke = FALSE,
+        smoothFactor = .2,
+        fillOpacity = .7,
+        color = ~ pal(var)
+      ) |>
+      addLegend(
+        "bottomright",
+        pal = pal,
+        values = ~var,
+        title = NULL,
+        opacity = .7
+      )
   })
 
   # Yearly graph
