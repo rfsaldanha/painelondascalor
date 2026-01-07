@@ -9,9 +9,7 @@ library(lubridate)
 library(ggplot2)
 
 # Data connection
-db_yearly <- open_dataset(sources = "data/banco_anual_tempmed.parquet") |>
-  mutate(intensidade = as.numeric(intensidade))
-
+db_yearly <- open_dataset(sources = "data/banco_anual_tempmed.parquet")
 db_daily <- open_dataset(sources = "data/banco_diario_tempmed.parquet")
 
 # Read municipality data
@@ -87,6 +85,11 @@ ui <- page_navbar(
           inputId = "municipality",
           label = "Município",
           choices = NULL
+        ),
+        selectInput(
+          inputId = "intensity",
+          label = "Intensidade da onda de calor",
+          choices = c("95", "92.5", "97.5")
         )
       ),
 
@@ -153,20 +156,25 @@ server <- function(input, output, session) {
   # Daily data
   daily_data <- reactive({
     req(input$municipality)
+    req(input$intensity)
 
     db_daily |>
       mutate(CODMUNRES = substr(as.character(CODMUNRES), 0, 6)) |>
       filter(CODMUNRES == input$municipality) |>
+      filter(intensidade == input$intensity) |>
       collect()
   })
 
   # Yearly data
   yearly_data <- reactive({
     req(input$municipality)
+    req(input$intensity)
 
     db_yearly |>
       mutate(CODMUNRES = substr(as.character(CODMUNRES), 0, 6)) |>
       filter(CODMUNRES == input$municipality) |>
+      filter(intensidade == input$intensity) |>
+      mutate(mes_mais_frequente = as.numeric(mes_mais_frequente)) |>
       collect()
   })
 
@@ -175,25 +183,34 @@ server <- function(input, output, session) {
     # intensidade, n_eventos, duracao_media, duracao_maxima, mes_mais_frequente, tmed_media_ondas, tmed_max_ondas, intensidade_media
 
     res <- yearly_data() |>
-      select(ano, intensidade, n_eventos, duracao_media) |>
-      pivot_longer(cols = c(intensidade, n_eventos, duracao_media)) |>
+      select(
+        ano,
+        n_eventos,
+        duracao_media,
+        intensidade_media
+      ) |>
+      pivot_longer(
+        cols = c(
+          n_eventos,
+          duracao_media,
+          intensidade_media
+        )
+      ) |>
       mutate(
         name = case_match(
           name,
-          "intensidade" ~ "Intensidade",
           "n_eventos" ~ "N. de eventos",
-          "duracao_media" ~ "Duração média"
+          "duracao_media" ~ "Duração média (dias consecutivos)",
+          "intensidade_media" ~ "Intensidade média (°C)"
         )
       ) |>
       arrange(ano, name)
-
-    print(res)
 
     ggplot(data = res, aes(x = ano, y = value, colour = name)) +
       geom_line() +
       facet_wrap(~name, scales = "free_y", ncol = 1) +
       theme_bw() +
-      theme(legend.position = "bottom", legend.direction = "horizontal")
+      theme(legend.position = "none")
   })
 }
 
